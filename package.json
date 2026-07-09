@@ -1,0 +1,29 @@
+{
+  "name": "moze-api",
+  "version": "1.0.0",
+  "description": "Moze staking + holders leaderboard API (Robinhood Chain)",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "holders:refresh": "node src/scripts/refresh-holders.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": ["moze", "nft", "staking", "robinhood"],
+  "author": "artnesh",
+  "license": "MIT",
+  "dependencies": {
+    "@fastify/cors": "^10.0.2",
+    "better-sqlite3": "^11.8.1",
+    "dotenv": "^16.4.7",
+    "ethers": "^6.13.5",
+    "fastify": "^5.2.1",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
