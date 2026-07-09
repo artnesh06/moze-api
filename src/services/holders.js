@@ -63,18 +63,25 @@ export async function getLeaderboard({ top = 25, force = false } = {}) {
   const holders = await getHolders({ force });
   const { points, staked } = allSoftPoints();
 
-  const enriched = holders.rows.map((r) => ({
-    addr: r.addr,
-    held: r.held,
-    staked: staked.get(r.addr) || 0,
-    softMoze: points.get(r.addr) || 0,
-  }));
+  const heldMap = new Map(holders.rows.map((r) => [r.addr, r.held]));
 
-  // rank primarily by held, then softMoze
+  // Only wallets that have soft-staked (≥1 position or soft points)
+  const stakerAddrs = new Set([...staked.keys(), ...points.keys()]);
+  const enriched = [...stakerAddrs]
+    .map((addr) => ({
+      addr,
+      held: heldMap.get(addr) || 0,
+      staked: staked.get(addr) || 0,
+      softMoze: points.get(addr) || 0,
+    }))
+    .filter((r) => r.staked > 0 || r.softMoze > 0);
+
+  // Rank stakers by soft $MOZE, then NFTs staked, then held
   enriched.sort(
     (a, b) =>
-      b.held - a.held ||
       b.softMoze - a.softMoze ||
+      b.staked - a.staked ||
+      b.held - a.held ||
       a.addr.localeCompare(b.addr)
   );
 
@@ -84,6 +91,7 @@ export async function getLeaderboard({ top = 25, force = false } = {}) {
     rows: enriched,
     supply: holders.supply,
     walletCount: holders.walletCount,
+    stakerCount: enriched.length,
     updatedAt: holders.updatedAt,
     stale: holders.stale,
     scanning: holders.scanning || false,
