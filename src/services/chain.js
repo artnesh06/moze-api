@@ -5,6 +5,7 @@ const ERC721_ABI = [
   'function balanceOf(address owner) view returns (uint256)',
   'function ownerOf(uint256 tokenId) view returns (address)',
   'function totalSupply() view returns (uint256)',
+  'function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)',
 ];
 
 let provider;
@@ -12,7 +13,10 @@ let contract;
 
 export function getProvider() {
   if (!provider) {
-    provider = new ethers.JsonRpcProvider(config.rpcUrl, config.chainId);
+    const network = ethers.Network.from(config.chainId);
+    provider = new ethers.JsonRpcProvider(config.rpcUrl, network, {
+      staticNetwork: network,
+    });
   }
   return provider;
 }
@@ -94,4 +98,71 @@ export async function balanceOf(address) {
   } catch {
     return 0;
   }
+}
+
+/**
+ * Token IDs owned by address. Uses balanceOf + ownerOf scan (contract may not be enumerable).
+ * Stops early once enough tokens are found.
+ */
+export async function tokensOfOwner(address) {
+  const owner = String(address || '').toLowerCase();
+  if (!owner || !owner.startsWith('0x') || owner.length !== 42) {
+    throw new Error('Invalid address');
+  }
+
+  const c = getContract();
+  let n = 0;
+  try {
+    n = Number(await c.balanceOf(owner));
+  } catch (err) {
+    throw new Error(`balanceOf failed: ${err?.shortMessage || err?.message || err}`);
+  }
+  if (!n) return [];
+
+  // Prefer enumerable if available
+  try {
+    const ids = [];
+    for (let i = 0; i < n; i += 1) {
+      // may throw if not IERC721Enumerable
+      // eslint-disable-next-line no-await-in-loop
+      ids.push(Number(await c.tokenOfOwnerByIndex(owner, i)));
+    }
+    if (ids.length === n) return [...new Set(ids)].sort((a, b) => a - b);
+  } catch {
+    /* scan fallback */
+  }
+
+  const supply = await getTotalSupply();
+  const found = [];
+  const batch = 40;
+  const maxId = Math.max(supply, 1);
+
+  for (let start = 1; start <= maxId && found.length < n; start += batch) {
+    const chunk = [];
+    for (let id = start; id < start + batch && id <= maxId; id += 1) {
+      chunk.push(
+        c
+          .ownerOf(id)
+          .then((o) => (String(o).toLowerCase() === owner ? id : null))
+          .catch(() => null)
+      );
+    }
+    // eslint-disable-next-line no-await-in-loop
+    const results = await Promise.all(chunk);
+    for (const id of results) {
+      if (id != null) found.push(id);
+    }
+  }
+
+  // token 0
+  if (found.length < n) {
+    try {
+      const o0 = String(await c.ownerOf(0)).toLowerCase();
+      if (o0 === owner) found.push(0);
+    } catch {
+      /* no token 0 */
+    }
+  }
+
+  return [...new Set(found)].sort((a, b) => a - b);
 }

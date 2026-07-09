@@ -6,6 +6,7 @@ import healthRoutes from './routes/health.js';
 import authRoutes from './routes/auth.js';
 import stakeRoutes from './routes/stake.js';
 import leaderboardRoutes from './routes/leaderboard.js';
+import walletRoutes from './routes/wallet.js';
 import { getHolders } from './services/holders.js';
 
 const app = Fastify({
@@ -33,6 +34,7 @@ await app.register(healthRoutes);
 await app.register(authRoutes);
 await app.register(stakeRoutes);
 await app.register(leaderboardRoutes);
+await app.register(walletRoutes);
 
 app.setErrorHandler((err, req, reply) => {
   req.log.error(err);
