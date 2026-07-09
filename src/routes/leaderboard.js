@@ -31,9 +31,11 @@ export default async function leaderboardRoutes(app) {
 
     return {
       top: data.top,
+      rows: data.rows,
       you: youRow,
       supply: data.supply,
       walletCount: data.walletCount,
+      stakerCount: data.stakerCount ?? data.rows.length,
       updatedAt: data.updatedAt,
       stale: data.stale,
       scanning: data.scanning || false,
