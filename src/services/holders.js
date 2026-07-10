@@ -28,10 +28,19 @@ export async function refreshHolders() {
   if (scanning) throw new Error('Holder scan already in progress');
   scanning = true;
   try {
+    const prev = getCachedHolders();
     const { counts, tokensByOwner, supply } = await scanHolders();
     const rows = [...counts.entries()]
       .map(([addr, held]) => ({ addr, held }))
       .sort((a, b) => b.held - a.held || a.addr.localeCompare(b.addr));
+
+    // Never wipe a good cache with an empty scan (RPC flake / mid-failure)
+    if (rows.length === 0 && supply > 0) {
+      if (prev?.rows?.length) {
+        return { ...prev, error: 'scan_empty_kept_cache', scanning: false };
+      }
+      throw new Error('Holder scan returned 0 wallets');
+    }
 
     // Persist reverse index so /v1/wallet/:addr/tokens is O(1) after warm scan
     const byOwner = {};
@@ -60,22 +69,53 @@ export async function refreshHolders() {
   }
 }
 
-export async function getHolders({ force = false } = {}) {
+export async function getHolders({ force = false, wait = false } = {}) {
   const cached = getCachedHolders();
-  if (!force && cached && !cached.stale) return cached;
+  const empty = !cached?.rows?.length;
+
+  // Fresh non-empty cache
+  if (!force && cached && !cached.stale && !empty) return cached;
+
+  // Caller needs a full result (CSV snapshot) — block until scan finishes
+  if (wait && (force || empty || cached?.stale)) {
+    if (scanning) {
+      // wait for in-flight scan (poll)
+      for (let i = 0; i < 120; i += 1) {
+        await new Promise((r) => setTimeout(r, 1000));
+        if (!scanning) break;
+      }
+      const after = getCachedHolders();
+      if (after?.rows?.length) return { ...after, scanning: false };
+    }
+    try {
+      return await refreshHolders();
+    } catch (err) {
+      if (cached?.rows?.length) return { ...cached, error: err.message };
+      throw err;
+    }
+  }
+
   // Never block HTTP on a long ownerOf scan — return cache and refresh in background
   if (scanning) {
     if (cached) return { ...cached, scanning: true };
-    // first boot: no cache yet — wait only if nothing to return
   }
-  if (force && cached) {
-    // kick background refresh, respond immediately with cache
-    refreshHolders().catch(() => {});
-    return { ...cached, scanning: true };
-  }
-  if (!force && cached && cached.stale) {
-    refreshHolders().catch(() => {});
-    return { ...cached, scanning: true };
+  if (force || (cached && cached.stale) || empty) {
+    if (cached && !empty) {
+      refreshHolders().catch(() => {});
+      return { ...cached, scanning: true };
+    }
+    // Empty cache: kick scan and return scanning flag (or wait if requested)
+    if (!scanning) refreshHolders().catch(() => {});
+    if (cached) return { ...cached, scanning: true };
+    return {
+      rows: [],
+      walletCount: 0,
+      tokensByOwner: {},
+      supply: config.maxSupply,
+      updatedAt: Date.now(),
+      stale: true,
+      scanning: true,
+    };
   }
   try {
     return await refreshHolders();

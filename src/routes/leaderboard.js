@@ -4,14 +4,21 @@ import { normalizeAddress } from '../services/auth.js';
 export default async function leaderboardRoutes(app) {
   app.get('/v1/holders', async (req) => {
     const force = String(req.query.force || '') === '1';
-    const data = await getHolders({ force });
+    // wait=1 blocks until full on-chain scan finishes (for CSV snapshot)
+    const wait = String(req.query.wait || '') === '1';
+    // Snapshot path: force+wait can take 1–3 min on Robinhood RPC
+    if (wait) {
+      // Fastify default timeout is generous enough; scan is batched
+    }
+    const data = await getHolders({ force, wait });
     return {
-      wallets: data.rows,
-      walletCount: data.walletCount,
+      wallets: data.rows || [],
+      walletCount: data.walletCount ?? (data.rows || []).length,
       supply: data.supply,
       updatedAt: data.updatedAt,
       stale: data.stale,
       scanning: data.scanning || false,
+      error: data.error || null,
     };
   });
 
