@@ -84,12 +84,12 @@ export function migrate(db) {
 }
 
 function defaultTicketCost() {
-  // Local/dev: 0.1 $MOZE for easy testing. Production: 11 (or set RAFFLE_TICKET_COST).
+  // Default: 1 $MOZE per ticket (override with RAFFLE_TICKET_COST).
   if (process.env.RAFFLE_TICKET_COST != null && process.env.RAFFLE_TICKET_COST !== '') {
     const n = Number(process.env.RAFFLE_TICKET_COST);
     if (Number.isFinite(n) && n > 0) return n;
   }
-  return process.env.NODE_ENV === 'production' ? 11 : 0.1;
+  return 1;
 }
 
 function seedDefaultRaffle(db) {
