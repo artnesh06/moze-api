@@ -1,6 +1,6 @@
 import { config } from '../config.js';
 import { getDb } from '../db/index.js';
-import { scanHolders } from './chain.js';
+import { scanHolders, setOwnerTokensIndex } from './chain.js';
 import { allSoftPoints } from './stake.js';
 
 let scanning = false;
@@ -10,8 +10,13 @@ export function getCachedHolders() {
   const row = db.prepare(`SELECT payload, updated_at, supply FROM holders_cache WHERE id = 1`).get();
   if (!row) return null;
   const age = Date.now() - row.updated_at;
+  const payload = JSON.parse(row.payload);
+  // Warm reverse index from disk cache (survives process restart)
+  if (payload.tokensByOwner && age < 15 * 60 * 1000) {
+    setOwnerTokensIndex(payload.tokensByOwner, row.updated_at);
+  }
   return {
-    ...JSON.parse(row.payload),
+    ...payload,
     updatedAt: row.updated_at,
     supply: row.supply,
     ageMs: age,
@@ -23,12 +28,20 @@ export async function refreshHolders() {
   if (scanning) throw new Error('Holder scan already in progress');
   scanning = true;
   try {
-    const { counts, supply } = await scanHolders();
+    const { counts, tokensByOwner, supply } = await scanHolders();
     const rows = [...counts.entries()]
       .map(([addr, held]) => ({ addr, held }))
       .sort((a, b) => b.held - a.held || a.addr.localeCompare(b.addr));
 
-    const payload = { rows, walletCount: rows.length };
+    // Persist reverse index so /v1/wallet/:addr/tokens is O(1) after warm scan
+    const byOwner = {};
+    if (tokensByOwner) {
+      for (const [addr, ids] of tokensByOwner.entries()) {
+        byOwner[addr] = ids;
+      }
+    }
+
+    const payload = { rows, walletCount: rows.length, tokensByOwner: byOwner };
     const now = Date.now();
     getDb()
       .prepare(

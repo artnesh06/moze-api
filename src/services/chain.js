@@ -42,12 +42,16 @@ export async function getTotalSupply() {
   return config.maxSupply;
 }
 
-/** Returns Map<lowerAddress, heldCount> */
+/**
+ * Full collection owner scan.
+ * @returns {{ counts: Map, tokensByOwner: Map<string, number[]>, supply: number }}
+ */
 export async function scanHolders(onProgress) {
   const c = getContract();
   const supply = await getTotalSupply();
   const counts = new Map();
-  const batch = 60;
+  const tokensByOwner = new Map(); // addr -> token ids
+  const batch = 100;
   const maxId = Math.max(supply, 1);
 
   for (let start = 1; start <= maxId; start += batch) {
@@ -56,14 +60,16 @@ export async function scanHolders(onProgress) {
       chunk.push(
         c
           .ownerOf(id)
-          .then((o) => String(o).toLowerCase())
-          .catch(() => null)
+          .then((o) => ({ id, owner: String(o).toLowerCase() }))
+          .catch(() => ({ id, owner: null }))
       );
     }
-    const owners = await Promise.all(chunk);
-    for (const o of owners) {
-      if (!o || o === ethers.ZeroAddress.toLowerCase()) continue;
-      counts.set(o, (counts.get(o) || 0) + 1);
+    const results = await Promise.all(chunk);
+    for (const { id, owner } of results) {
+      if (!owner || owner === ethers.ZeroAddress.toLowerCase()) continue;
+      counts.set(owner, (counts.get(owner) || 0) + 1);
+      if (!tokensByOwner.has(owner)) tokensByOwner.set(owner, []);
+      tokensByOwner.get(owner).push(id);
     }
     if (onProgress) onProgress(Math.min(start + batch - 1, maxId), maxId);
   }
@@ -72,12 +78,36 @@ export async function scanHolders(onProgress) {
     const o0 = String(await c.ownerOf(0)).toLowerCase();
     if (o0 && o0 !== ethers.ZeroAddress.toLowerCase()) {
       counts.set(o0, (counts.get(o0) || 0) + 1);
+      if (!tokensByOwner.has(o0)) tokensByOwner.set(o0, []);
+      tokensByOwner.get(o0).push(0);
     }
   } catch {
     /* no token 0 */
   }
 
-  return { counts, supply };
+  // keep in-memory reverse index for fast /v1/wallet/:addr/tokens
+  setOwnerTokensIndex(tokensByOwner, Date.now());
+
+  return { counts, tokensByOwner, supply };
+}
+
+/** In-memory owner → tokenIds from last holder scan (fast path for wallet tokens). */
+let ownerTokensIndex = new Map();
+let ownerTokensIndexAt = 0;
+
+export function setOwnerTokensIndex(map, at = Date.now()) {
+  ownerTokensIndex = map instanceof Map ? map : new Map(Object.entries(map || {}));
+  ownerTokensIndexAt = at;
+}
+
+export function getTokensFromIndex(address) {
+  const owner = String(address || '').toLowerCase();
+  if (!owner || !ownerTokensIndex.size) return null;
+  // stale after 15 min without rescan
+  if (Date.now() - ownerTokensIndexAt > 15 * 60 * 1000) return null;
+  const ids = ownerTokensIndex.get(owner);
+  if (!ids) return [];
+  return [...ids].sort((a, b) => a - b);
 }
 
 export async function ownersOfTokenIds(tokenIds) {
@@ -105,8 +135,7 @@ export async function balanceOf(address) {
 
 /**
  * Token IDs owned by address.
- * Prefer IERC721Enumerable; else batched ownerOf scan with early exit.
- * Cached briefly so reconnects are fast.
+ * Order: short TTL cache → holders reverse index → enumerable → batched ownerOf.
  */
 export async function tokensOfOwner(address, { force = false } = {}) {
   const owner = String(address || '').toLowerCase();
@@ -133,14 +162,28 @@ export async function tokensOfOwner(address, { force = false } = {}) {
     return [];
   }
 
+  // Fast path: reverse index from last holders scan (same RPC work, reused)
+  if (!force) {
+    const fromIndex = getTokensFromIndex(owner);
+    if (fromIndex && fromIndex.length === n) {
+      tokensCache.set(owner, { at: Date.now(), tokens: fromIndex, bal: n });
+      return fromIndex;
+    }
+    // partial index match still useful if non-empty and <= balance
+    if (fromIndex && fromIndex.length > 0 && fromIndex.length <= n) {
+      tokensCache.set(owner, { at: Date.now(), tokens: fromIndex, bal: n });
+      return fromIndex;
+    }
+  }
+
   // Prefer enumerable if available (O(n) not O(supply))
   try {
-    const ids = [];
-    for (let i = 0; i < n; i += 1) {
-      // eslint-disable-next-line no-await-in-loop
-      ids.push(Number(await c.tokenOfOwnerByIndex(owner, i)));
-    }
-    if (ids.length === n) {
+    const ids = await Promise.all(
+      Array.from({ length: n }, (_, i) =>
+        c.tokenOfOwnerByIndex(owner, i).then((x) => Number(x))
+      )
+    );
+    if (ids.length === n && ids.every((x) => Number.isFinite(x))) {
       const sorted = [...new Set(ids)].sort((a, b) => a - b);
       tokensCache.set(owner, { at: Date.now(), tokens: sorted, bal: n });
       return sorted;
@@ -151,7 +194,7 @@ export async function tokensOfOwner(address, { force = false } = {}) {
 
   const supply = await getTotalSupply();
   const found = [];
-  const batch = 80; // larger batches = fewer round-trips
+  const batch = 120;
   const maxId = Math.max(supply, 1);
 
   for (let start = 1; start <= maxId && found.length < n; start += batch) {
