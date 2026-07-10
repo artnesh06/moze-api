@@ -19,10 +19,10 @@ export default async function walletRoutes(app) {
     }
     const force = String(req.query.force || '') === '1';
     try {
-      // Hard cap so connect never hangs the whole process
+      // Hard cap 8s — never hang connect/API workers
       const tokens = await withTimeout(
         tokensOfOwner(address, { force }),
-        20_000,
+        8_000,
         'Token lookup timeout — retry'
       );
       return {
@@ -32,10 +32,11 @@ export default async function walletRoutes(app) {
         balanceOf: tokens.length,
       };
     } catch (err) {
-      req.log.error(err);
-      const status = /timeout/i.test(err?.message || '') ? 504 : 502;
+      req.log.warn({ err: err?.message }, 'wallet tokens');
+      const status = /timeout|cache|client scan/i.test(err?.message || '') ? 503 : 502;
       return reply.code(status).send({
         error: err?.message || 'Failed to read wallet tokens from chain',
+        code: err?.code || undefined,
       });
     }
   });

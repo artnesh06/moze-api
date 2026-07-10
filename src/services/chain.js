@@ -189,43 +189,15 @@ export async function tokensOfOwner(address, { force = false } = {}) {
       return sorted;
     }
   } catch {
-    /* scan fallback */
+    /* not enumerable */
   }
 
-  const supply = await getTotalSupply();
-  const found = [];
-  const batch = 120;
-  const maxId = Math.max(supply, 1);
-
-  for (let start = 1; start <= maxId && found.length < n; start += batch) {
-    const chunk = [];
-    for (let id = start; id < start + batch && id <= maxId; id += 1) {
-      chunk.push(
-        c
-          .ownerOf(id)
-          .then((o) => (String(o).toLowerCase() === owner ? id : null))
-          .catch(() => null)
-      );
-    }
-    // eslint-disable-next-line no-await-in-loop
-    const results = await Promise.all(chunk);
-    for (const id of results) {
-      if (id != null) found.push(id);
-    }
-  }
-
-  if (found.length < n) {
-    try {
-      const o0 = String(await c.ownerOf(0)).toLowerCase();
-      if (o0 === owner) found.push(0);
-    } catch {
-      /* no token 0 */
-    }
-  }
-
-  const sorted = [...new Set(found)].sort((a, b) => a - b);
-  tokensCache.set(owner, { at: Date.now(), tokens: sorted, bal: n });
-  return sorted;
+  // IMPORTANT: never do full 1..supply ownerOf scan on the request path.
+  // It hangs for 60s+ on this RPC and blocks connects. Client scans instead;
+  // holders reverse-index covers warm cache after background scan.
+  const err = new Error('Token list not in cache — client should scan');
+  err.code = 'TOKENS_NEED_CLIENT_SCAN';
+  throw err;
 }
 
 export function clearTokensCache(address) {
