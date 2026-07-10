@@ -57,7 +57,10 @@ npm run dev
 1. **New Resource** → GitHub → `artnesh06/moze-api` · branch `main`
 2. Build: **Dockerfile**
 3. Port: **3000**
-4. Persistent storage: mount volume → `/data`
+4. **Persistent storage (required):** named volume → container path **`/data`**  
+   - SQLite lives at `/data/moze.db` (not inside the image)  
+   - Redeploy **reuses** this volume — stake positions, banked/claimed, leaderboard stay  
+   - Migrations are **additive only** (`CREATE TABLE IF NOT EXISTS`) — never wipe wallets/positions  
 5. Domain: `api.mozestreet.art` + HTTPS
 6. Env:
 
@@ -68,6 +71,8 @@ MOZE_CA=0x0e579bcec21ae9dc5400db46cab67d5a8d0a58cc
 DATABASE_PATH=/data/moze.db
 ADMIN_SECRET=change-me
 ```
+
+After deploy, check `/health` → `stake.positions` / `stake.stakers` should stay non-zero if people already staked.
 
 DNS: `A` / `CNAME` for `api` → Coolify VPS.
 

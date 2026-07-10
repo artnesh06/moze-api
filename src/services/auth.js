@@ -37,6 +37,33 @@ export function buildActionMessage({ action, address, tokenIds, nonce, timestamp
   ].join('\n');
 }
 
+export function buildRaffleMessage({ address, raffleId, tickets, nonce, timestamp }) {
+  return [
+    'Moze Raffle',
+    'Action: raffle_enter',
+    `Raffle: ${Number(raffleId)}`,
+    `Tickets: ${Number(tickets)}`,
+    `Address: ${address}`,
+    `Nonce: ${nonce}`,
+    `Timestamp: ${timestamp}`,
+  ].join('\n');
+}
+
+function consumeNonce(addr, nonce) {
+  const db = getDb();
+  const row = db.prepare(`SELECT * FROM nonces WHERE nonce = ?`).get(nonce);
+  if (!row) throw new Error('Unknown nonce');
+  if (row.used_at) throw new Error('Nonce already used');
+  if (String(row.address).toLowerCase() !== addr) {
+    throw new Error('Nonce was issued for a different address');
+  }
+  if (Date.now() - row.created_at > config.sigMaxAgeMs) {
+    throw new Error('Nonce expired');
+  }
+  db.prepare(`UPDATE nonces SET used_at = ? WHERE nonce = ?`).run(Date.now(), nonce);
+  return row;
+}
+
 export function verifyActionSignature({
   action,
   address,
@@ -55,17 +82,6 @@ export function verifyActionSignature({
   const age = Math.abs(Date.now() - ts);
   if (age > config.sigMaxAgeMs) throw new Error('Signature expired — request a new nonce');
 
-  const db = getDb();
-  const row = db.prepare(`SELECT * FROM nonces WHERE nonce = ?`).get(nonce);
-  if (!row) throw new Error('Unknown nonce');
-  if (row.used_at) throw new Error('Nonce already used');
-  if (String(row.address).toLowerCase() !== addr) {
-    throw new Error('Nonce was issued for a different address');
-  }
-  if (Date.now() - row.created_at > config.sigMaxAgeMs) {
-    throw new Error('Nonce expired');
-  }
-
   const message = buildActionMessage({
     action,
     address: addr,
@@ -82,6 +98,44 @@ export function verifyActionSignature({
   }
   if (recovered !== addr) throw new Error('Signature does not match address');
 
-  db.prepare(`UPDATE nonces SET used_at = ? WHERE nonce = ?`).run(Date.now(), nonce);
+  consumeNonce(addr, nonce);
+  return { address: addr, message };
+}
+
+export function verifyRaffleSignature({
+  address,
+  raffleId,
+  tickets,
+  nonce,
+  timestamp,
+  signature,
+}) {
+  const addr = normalizeAddress(address);
+  if (!addr) throw new Error('Invalid address');
+  if (!signature) throw new Error('Missing signature');
+  if (!nonce) throw new Error('Missing nonce');
+
+  const ts = Number(timestamp);
+  if (!Number.isFinite(ts)) throw new Error('Invalid timestamp');
+  const age = Math.abs(Date.now() - ts);
+  if (age > config.sigMaxAgeMs) throw new Error('Signature expired — request a new nonce');
+
+  const message = buildRaffleMessage({
+    address: addr,
+    raffleId,
+    tickets,
+    nonce,
+    timestamp: ts,
+  });
+
+  let recovered;
+  try {
+    recovered = ethers.verifyMessage(message, signature).toLowerCase();
+  } catch {
+    throw new Error('Invalid signature');
+  }
+  if (recovered !== addr) throw new Error('Signature does not match address');
+
+  consumeNonce(addr, nonce);
   return { address: addr, message };
 }

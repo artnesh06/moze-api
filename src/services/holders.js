@@ -50,7 +50,20 @@ export async function refreshHolders() {
 export async function getHolders({ force = false } = {}) {
   const cached = getCachedHolders();
   if (!force && cached && !cached.stale) return cached;
-  if (!force && cached && scanning) return { ...cached, scanning: true };
+  // Never block HTTP on a long ownerOf scan — return cache and refresh in background
+  if (scanning) {
+    if (cached) return { ...cached, scanning: true };
+    // first boot: no cache yet — wait only if nothing to return
+  }
+  if (force && cached) {
+    // kick background refresh, respond immediately with cache
+    refreshHolders().catch(() => {});
+    return { ...cached, scanning: true };
+  }
+  if (!force && cached && cached.stale) {
+    refreshHolders().catch(() => {});
+    return { ...cached, scanning: true };
+  }
   try {
     return await refreshHolders();
   } catch (err) {

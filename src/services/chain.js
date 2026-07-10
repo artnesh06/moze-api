@@ -11,6 +11,10 @@ const ERC721_ABI = [
 let provider;
 let contract;
 
+/** Short TTL cache for wallet token lists (speeds up reconnect). */
+const tokensCache = new Map(); // addr -> { at, tokens, bal }
+const TOKENS_CACHE_TTL_MS = Number(process.env.WALLET_TOKENS_CACHE_TTL_MS || 90_000);
+
 export function getProvider() {
   if (!provider) {
     const network = ethers.Network.from(config.chainId);
@@ -43,7 +47,7 @@ export async function scanHolders(onProgress) {
   const c = getContract();
   const supply = await getTotalSupply();
   const counts = new Map();
-  const batch = 40;
+  const batch = 60;
   const maxId = Math.max(supply, 1);
 
   for (let start = 1; start <= maxId; start += batch) {
@@ -64,7 +68,6 @@ export async function scanHolders(onProgress) {
     if (onProgress) onProgress(Math.min(start + batch - 1, maxId), maxId);
   }
 
-  // token 0 if exists
   try {
     const o0 = String(await c.ownerOf(0)).toLowerCase();
     if (o0 && o0 !== ethers.ZeroAddress.toLowerCase()) {
@@ -101,13 +104,21 @@ export async function balanceOf(address) {
 }
 
 /**
- * Token IDs owned by address. Uses balanceOf + ownerOf scan (contract may not be enumerable).
- * Stops early once enough tokens are found.
+ * Token IDs owned by address.
+ * Prefer IERC721Enumerable; else batched ownerOf scan with early exit.
+ * Cached briefly so reconnects are fast.
  */
-export async function tokensOfOwner(address) {
+export async function tokensOfOwner(address, { force = false } = {}) {
   const owner = String(address || '').toLowerCase();
   if (!owner || !owner.startsWith('0x') || owner.length !== 42) {
     throw new Error('Invalid address');
+  }
+
+  if (!force) {
+    const hit = tokensCache.get(owner);
+    if (hit && Date.now() - hit.at < TOKENS_CACHE_TTL_MS) {
+      return hit.tokens;
+    }
   }
 
   const c = getContract();
@@ -117,24 +128,30 @@ export async function tokensOfOwner(address) {
   } catch (err) {
     throw new Error(`balanceOf failed: ${err?.shortMessage || err?.message || err}`);
   }
-  if (!n) return [];
+  if (!n) {
+    tokensCache.set(owner, { at: Date.now(), tokens: [], bal: 0 });
+    return [];
+  }
 
-  // Prefer enumerable if available
+  // Prefer enumerable if available (O(n) not O(supply))
   try {
     const ids = [];
     for (let i = 0; i < n; i += 1) {
-      // may throw if not IERC721Enumerable
       // eslint-disable-next-line no-await-in-loop
       ids.push(Number(await c.tokenOfOwnerByIndex(owner, i)));
     }
-    if (ids.length === n) return [...new Set(ids)].sort((a, b) => a - b);
+    if (ids.length === n) {
+      const sorted = [...new Set(ids)].sort((a, b) => a - b);
+      tokensCache.set(owner, { at: Date.now(), tokens: sorted, bal: n });
+      return sorted;
+    }
   } catch {
     /* scan fallback */
   }
 
   const supply = await getTotalSupply();
   const found = [];
-  const batch = 40;
+  const batch = 80; // larger batches = fewer round-trips
   const maxId = Math.max(supply, 1);
 
   for (let start = 1; start <= maxId && found.length < n; start += batch) {
@@ -154,7 +171,6 @@ export async function tokensOfOwner(address) {
     }
   }
 
-  // token 0
   if (found.length < n) {
     try {
       const o0 = String(await c.ownerOf(0)).toLowerCase();
@@ -164,5 +180,15 @@ export async function tokensOfOwner(address) {
     }
   }
 
-  return [...new Set(found)].sort((a, b) => a - b);
+  const sorted = [...new Set(found)].sort((a, b) => a - b);
+  tokensCache.set(owner, { at: Date.now(), tokens: sorted, bal: n });
+  return sorted;
+}
+
+export function clearTokensCache(address) {
+  if (!address) {
+    tokensCache.clear();
+    return;
+  }
+  tokensCache.delete(String(address).toLowerCase());
 }

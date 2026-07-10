@@ -8,8 +8,9 @@ export default async function walletRoutes(app) {
     if (!address) {
       return reply.code(400).send({ error: 'Invalid address' });
     }
+    const force = String(req.query.force || '') === '1';
     try {
-      const tokens = await tokensOfOwner(address);
+      const tokens = await tokensOfOwner(address, { force });
       const bal = await balanceOf(address);
       return {
         address,
