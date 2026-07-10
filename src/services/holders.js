@@ -1,6 +1,6 @@
 import { config } from '../config.js';
 import { getDb } from '../db/index.js';
-import { scanHolders, setOwnerTokensIndex } from './chain.js';
+import { balanceOf, scanHolders, setOwnerTokensIndex } from './chain.js';
 import { allSoftPoints } from './stake.js';
 
 let scanning = false;
@@ -89,18 +89,36 @@ export async function getLeaderboard({ top = 25, force = false } = {}) {
   const holders = await getHolders({ force });
   const { points, staked } = allSoftPoints();
 
-  const heldMap = new Map(holders.rows.map((r) => [r.addr, r.held]));
+  const heldMap = new Map(
+    (holders.rows || []).map((r) => [String(r.addr).toLowerCase(), Number(r.held) || 0])
+  );
 
   // Only wallets that have soft-staked (≥1 position or soft points)
   const stakerAddrs = new Set([...staked.keys(), ...points.keys()]);
   const enriched = [...stakerAddrs]
-    .map((addr) => ({
-      addr,
-      held: heldMap.get(addr) || 0,
-      staked: staked.get(addr) || 0,
-      softMoze: points.get(addr) || 0,
-    }))
+    .map((addr) => {
+      const a = String(addr).toLowerCase();
+      return {
+        addr: a,
+        held: heldMap.get(a) || 0,
+        staked: staked.get(a) || staked.get(addr) || 0,
+        softMoze: points.get(a) || points.get(addr) || 0,
+      };
+    })
     .filter((r) => r.staked > 0 || r.softMoze > 0);
+
+  // Holders full-scan cache is often incomplete/stale (RPC). For the small
+  // staker set, prefer live balanceOf so HELD is accurate without reconnect.
+  await Promise.all(
+    enriched.map(async (row) => {
+      try {
+        const bal = await balanceOf(row.addr);
+        if (Number.isFinite(bal) && bal >= 0) row.held = bal;
+      } catch {
+        /* keep cache value */
+      }
+    })
+  );
 
   // Rank stakers by soft $MOZE, then NFTs staked, then held
   enriched.sort(
