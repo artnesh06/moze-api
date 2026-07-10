@@ -160,8 +160,9 @@ export function enterRaffle({ address, raffleId, tickets }) {
     err.statusCode = 400;
     throw err;
   }
-  if (n > 100) {
-    const err = new Error('Max 100 tickets per request');
+  // Soft per-request cap only (abuse guard). No per-wallet max by default.
+  if (n > 10000) {
+    const err = new Error('Max 10000 tickets per request');
     err.statusCode = 400;
     throw err;
   }

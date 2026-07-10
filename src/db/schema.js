@@ -92,6 +92,17 @@ function defaultTicketCost() {
   return 1;
 }
 
+/** null = unlimited tickets per wallet. Set RAFFLE_MAX_TICKETS_PER_WALLET to cap. */
+function defaultMaxTicketsPerWallet() {
+  const raw = process.env.RAFFLE_MAX_TICKETS_PER_WALLET;
+  if (raw == null || raw === '' || raw === '0' || String(raw).toLowerCase() === 'unlimited') {
+    return null;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.floor(n);
+}
+
 function seedDefaultRaffle(db) {
   // Never resets stake tables. Prize = founder Moze #30.
   const prizeLabel = process.env.RAFFLE_PRIZE_LABEL || 'Moze #30 (founder)';
@@ -100,7 +111,8 @@ function seedDefaultRaffle(db) {
     process.env.RAFFLE_DESCRIPTION ||
     'Enter with soft $MOZE from staking. Prize: Moze #30 from the founder. One ticket = one chance.';
   const cost = defaultTicketCost();
-  const maxPer = Number(process.env.RAFFLE_MAX_TICKETS_PER_WALLET || 20);
+  // null / 0 / unset = unlimited tickets per wallet
+  const maxPer = defaultMaxTicketsPerWallet();
   // Default window: 14 days from first seed (or RAFFLE_ENDS_IN_DAYS)
   const endsInDays = Number(process.env.RAFFLE_ENDS_IN_DAYS || 14);
   const forceEnds = String(process.env.RAFFLE_REFRESH_ENDS || '') === '1';
@@ -122,7 +134,7 @@ function seedDefaultRaffle(db) {
       prizeLabel,
       title,
       description,
-      Number.isFinite(maxPer) && maxPer > 0 ? maxPer : 20,
+      maxPer,
       'moze-raffle-1'
     );
     // Set 14-day end once if missing, or when RAFFLE_REFRESH_ENDS=1 (one-shot on deploy)
@@ -151,7 +163,7 @@ function seedDefaultRaffle(db) {
     description,
     prizeLabel,
     cost,
-    Number.isFinite(maxPer) && maxPer > 0 ? maxPer : 20,
+    maxPer,
     now,
     endsAt,
     now
