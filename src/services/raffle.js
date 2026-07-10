@@ -63,6 +63,28 @@ export function getActiveRaffle() {
   return mapRaffle(any);
 }
 
+export function getRaffleBySlug(slug) {
+  if (!slug) return null;
+  const row = getDb().prepare(`SELECT * FROM raffles WHERE slug = ?`).get(String(slug));
+  return mapRaffle(row);
+}
+
+/** All raffles (for multi-prize picker). */
+export function listRaffles() {
+  return getDb()
+    .prepare(`SELECT * FROM raffles ORDER BY id ASC`)
+    .all()
+    .map(mapRaffle);
+}
+
+function resolveRaffle({ id = null, slug = null } = {}) {
+  if (id != null && Number.isFinite(Number(id))) {
+    return getRaffleById(Number(id));
+  }
+  if (slug) return getRaffleBySlug(slug);
+  return getActiveRaffle();
+}
+
 function entryStats(raffleId, youAddr = null) {
   const db = getDb();
   const tot = db
@@ -111,12 +133,20 @@ function entryStats(raffleId, youAddr = null) {
   };
 }
 
-/** Public summary for GET /v1/raffle */
-export function getRaffleSummary({ you = null } = {}) {
-  const raffle = getActiveRaffle();
-  if (!raffle) return { ok: true, raffle: null };
-
+function buildRafflePayload(raffle, you) {
+  if (!raffle) return null;
   const stats = entryStats(raffle.id, you);
+  return {
+    ...raffle,
+    open: isWindowOpen(raffle),
+    ...stats,
+  };
+}
+
+/** Public summary for GET /v1/raffle — supports multi raffle via ?id= / ?slug= */
+export function getRaffleSummary({ you = null, id = null, slug = null } = {}) {
+  const raffle = resolveRaffle({ id, slug });
+
   let yourPending = null;
   let yourClaimed = null;
   let yourMoze = null;
@@ -133,17 +163,36 @@ export function getRaffleSummary({ you = null } = {}) {
     }
   }
 
+  // Light list for prize picker (all raffles)
+  const raffles = listRaffles().map((r) => {
+    const st = entryStats(r.id, you);
+    return {
+      id: r.id,
+      slug: r.slug,
+      title: r.title,
+      prizeLabel: r.prizeLabel,
+      ticketCost: r.ticketCost,
+      status: r.status,
+      startsAt: r.startsAt,
+      endsAt: r.endsAt,
+      open: isWindowOpen(r),
+      totalTickets: st.totalTickets,
+      entrants: st.entrants,
+      yourTickets: st.yourTickets,
+    };
+  });
+
+  const payload = buildRafflePayload(raffle, you);
+  if (payload) {
+    payload.yourMoze = yourMoze;
+    payload.yourPending = yourPending;
+    payload.yourClaimed = yourClaimed;
+  }
+
   return {
     ok: true,
-    raffle: {
-      ...raffle,
-      open: isWindowOpen(raffle),
-      ...stats,
-      // total soft $MOZE (pending + claimed) — spendable on raffle
-      yourMoze,
-      yourPending,
-      yourClaimed,
-    },
+    raffles,
+    raffle: payload,
   };
 }
 

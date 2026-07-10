@@ -103,23 +103,22 @@ function defaultMaxTicketsPerWallet() {
   return Math.floor(n);
 }
 
-function seedDefaultRaffle(db) {
-  // Never resets stake tables. Prize = founder Moze #30.
-  const prizeLabel = process.env.RAFFLE_PRIZE_LABEL || 'Moze #30 (founder)';
-  const title = process.env.RAFFLE_TITLE || 'Moze Raffle #1 — Win #30';
-  const description =
-    process.env.RAFFLE_DESCRIPTION ||
-    'Enter with soft $MOZE from staking. Prize: Moze #30 from the founder. One ticket = one chance.';
-  const cost = defaultTicketCost();
-  // null / 0 / unset = unlimited tickets per wallet
-  const maxPer = defaultMaxTicketsPerWallet();
-  // Default window: 14 days from first seed (or RAFFLE_ENDS_IN_DAYS)
-  const endsInDays = Number(process.env.RAFFLE_ENDS_IN_DAYS || 14);
-  const forceEnds = String(process.env.RAFFLE_REFRESH_ENDS || '') === '1';
+/**
+ * Upsert one raffle by slug. Never wipes entries / stake tables.
+ * @param {import('better-sqlite3').Database} db
+ * @param {{ slug: string, title: string, description: string, prizeLabel: string, cost?: number, maxPer?: number|null, endsInDays?: number, forceEnds?: boolean }} cfg
+ */
+function upsertRaffle(db, cfg) {
+  const cost = cfg.cost != null ? cfg.cost : defaultTicketCost();
+  const maxPer = cfg.maxPer !== undefined ? cfg.maxPer : defaultMaxTicketsPerWallet();
+  const endsInDays = Number(cfg.endsInDays ?? process.env.RAFFLE_ENDS_IN_DAYS ?? 14);
+  const forceEnds =
+    cfg.forceEnds != null
+      ? !!cfg.forceEnds
+      : String(process.env.RAFFLE_REFRESH_ENDS || '') === '1';
 
-  const row = db.prepare(`SELECT id, ends_at FROM raffles WHERE slug = ?`).get('moze-raffle-1');
+  const row = db.prepare(`SELECT id, ends_at FROM raffles WHERE slug = ?`).get(cfg.slug);
   if (row) {
-    // Sync price/copy from env without wiping stake tables or entry tickets
     db.prepare(
       `UPDATE raffles
        SET ticket_cost = ?,
@@ -129,28 +128,20 @@ function seedDefaultRaffle(db) {
            max_tickets_per_wallet = ?,
            status = CASE WHEN status = 'drawn' THEN status ELSE 'open' END
        WHERE slug = ?`
-    ).run(
-      cost,
-      prizeLabel,
-      title,
-      description,
-      maxPer,
-      'moze-raffle-1'
-    );
-    // Set 14-day end once if missing, or when RAFFLE_REFRESH_ENDS=1 (one-shot on deploy)
+    ).run(cost, cfg.prizeLabel, cfg.title, cfg.description, maxPer, cfg.slug);
+
     if ((row.ends_at == null || forceEnds) && endsInDays > 0) {
       const endsAt = Date.now() + endsInDays * 24 * 60 * 60 * 1000;
       const startsAt = Date.now();
       db.prepare(
         `UPDATE raffles SET starts_at = ?, ends_at = ?, status = 'open' WHERE slug = ?`
-      ).run(startsAt, endsAt, 'moze-raffle-1');
+      ).run(startsAt, endsAt, cfg.slug);
     }
     return;
   }
 
   const now = Date.now();
   const endsAt = endsInDays > 0 ? now + endsInDays * 24 * 60 * 60 * 1000 : null;
-
   db.prepare(
     `INSERT INTO raffles (
       slug, title, description, prize_label, ticket_cost,
@@ -158,14 +149,38 @@ function seedDefaultRaffle(db) {
       winner_address, drawn_at, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, NULL, NULL, ?)`
   ).run(
-    'moze-raffle-1',
-    title,
-    description,
-    prizeLabel,
+    cfg.slug,
+    cfg.title,
+    cfg.description,
+    cfg.prizeLabel,
     cost,
     maxPer,
     now,
     endsAt,
     now
   );
+}
+
+function seedDefaultRaffle(db) {
+  // Raffle #1 — founder Moze #30
+  upsertRaffle(db, {
+    slug: 'moze-raffle-1',
+    title: process.env.RAFFLE_TITLE || 'Moze Raffle #1 — Win #30',
+    description:
+      process.env.RAFFLE_DESCRIPTION ||
+      'Enter with soft $MOZE from staking. Prize: Moze #30 from the founder. One ticket = one chance.',
+    prizeLabel: process.env.RAFFLE_PRIZE_LABEL || 'Moze #30 (founder)',
+  });
+
+  // Raffle #2 — Robin Frogs #4284 (collab / trending prize)
+  // OpenSea: https://opensea.io/item/robinhood/0x748af7baa726b49316573a124f2644b5638452d7/4284
+  upsertRaffle(db, {
+    slug: 'moze-raffle-2',
+    title: process.env.RAFFLE_2_TITLE || 'Moze Raffle #2 — Robin Frogs #4284',
+    description:
+      process.env.RAFFLE_2_DESCRIPTION ||
+      'Enter with soft $MOZE. Prize: Robin Frogs #4284. One ticket = one chance.',
+    prizeLabel: process.env.RAFFLE_2_PRIZE_LABEL || 'Robin Frogs #4284',
+    // force fresh 14-day window on first seed only (ends_at null → set); existing keeps ends
+  });
 }
