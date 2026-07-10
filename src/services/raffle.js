@@ -21,10 +21,20 @@ function mapRaffle(row) {
   };
 }
 
+function toMs(ts) {
+  let n = Number(ts);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  if (n < 1e12) n *= 1000;
+  return Math.floor(n);
+}
+
 function isWindowOpen(raffle, now = Date.now()) {
   if (!raffle || raffle.status !== 'open') return false;
-  if (raffle.startsAt && now < Number(raffle.startsAt)) return false;
-  if (raffle.endsAt && now > Number(raffle.endsAt)) return false;
+  const starts = toMs(raffle.startsAt);
+  const ends = toMs(raffle.endsAt);
+  // Start immediately if startsAt missing or in the past
+  if (starts && now < starts) return false;
+  if (ends && now > ends) return false;
   return true;
 }
 

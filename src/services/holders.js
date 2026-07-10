@@ -12,7 +12,7 @@ export function getCachedHolders() {
   const age = Date.now() - row.updated_at;
   const payload = JSON.parse(row.payload);
   // Warm reverse index from disk cache (survives process restart)
-  if (payload.tokensByOwner && age < 15 * 60 * 1000) {
+  if (payload.tokensByOwner) {
     setOwnerTokensIndex(payload.tokensByOwner, row.updated_at);
   }
   return {
