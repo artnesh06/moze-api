@@ -320,3 +320,218 @@ export function enterRaffle({ address, raffleId, tickets }) {
     raffle: summary.raffle,
   };
 }
+
+// ── Admin CRUD ──────────────────────────────────────────────────────────────
+
+function slugify(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 64);
+}
+
+/** Admin list with entry stats. */
+export function listRafflesAdmin() {
+  return listRaffles().map((r) => {
+    const st = entryStats(r.id, null);
+    return {
+      ...r,
+      open: isWindowOpen(r),
+      totalTickets: st.totalTickets,
+      entrants: st.entrants,
+    };
+  });
+}
+
+/**
+ * Create raffle. Body: slug?, title, prizeLabel|prize_label, description?,
+ * ticketCost?, maxTicketsPerWallet?, startsAt?, endsAt?, status?, endsInDays?
+ */
+export function createRaffle(body = {}) {
+  const title = String(body.title || '').trim();
+  const prizeLabel = String(body.prizeLabel || body.prize_label || '').trim();
+  if (!title || !prizeLabel) {
+    const err = new Error('title and prizeLabel required');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  let slug = String(body.slug || '').trim() || slugify(title);
+  if (!slug) slug = `raffle-${Date.now()}`;
+
+  const ticketCost = Number(body.ticketCost ?? body.ticket_cost ?? 1);
+  if (!Number.isFinite(ticketCost) || ticketCost <= 0) {
+    const err = new Error('ticketCost must be > 0');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  let maxPer = body.maxTicketsPerWallet ?? body.max_tickets_per_wallet;
+  if (maxPer === '' || maxPer === undefined) maxPer = null;
+  else if (maxPer != null) {
+    maxPer = Number(maxPer);
+    if (!Number.isFinite(maxPer) || maxPer < 1) maxPer = null;
+  }
+
+  const now = Date.now();
+  let startsAt = body.startsAt ?? body.starts_at;
+  let endsAt = body.endsAt ?? body.ends_at;
+  if (startsAt != null) startsAt = toMs(startsAt) || now;
+  else startsAt = now;
+  if (endsAt != null) endsAt = toMs(endsAt) || null;
+  else {
+    const days = Number(body.endsInDays ?? process.env.RAFFLE_ENDS_IN_DAYS ?? 14);
+    endsAt = days > 0 ? now + days * 86_400_000 : null;
+  }
+
+  const status = ['open', 'closed', 'drawn'].includes(String(body.status || '').toLowerCase())
+    ? String(body.status).toLowerCase()
+    : 'open';
+  const description = body.description != null ? String(body.description) : '';
+
+  const db = getDb();
+  try {
+    const result = db
+      .prepare(
+        `INSERT INTO raffles (
+          slug, title, description, prize_label, ticket_cost,
+          max_tickets_per_wallet, status, starts_at, ends_at,
+          winner_address, drawn_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`
+      )
+      .run(
+        slug,
+        title,
+        description,
+        prizeLabel,
+        ticketCost,
+        maxPer,
+        status,
+        startsAt,
+        endsAt,
+        now
+      );
+    return getRaffleById(result.lastInsertRowid);
+  } catch (e) {
+    if (String(e.message || '').includes('UNIQUE')) {
+      const err = new Error(`slug already exists: ${slug}`);
+      err.statusCode = 400;
+      throw err;
+    }
+    throw e;
+  }
+}
+
+/** Partial update by id. */
+export function updateRaffle(id, body = {}) {
+  const existing = getRaffleById(id);
+  if (!existing) {
+    const err = new Error('Raffle not found');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const slug = body.slug != null ? String(body.slug).trim() : existing.slug;
+  const title = body.title != null ? String(body.title).trim() : existing.title;
+  const description =
+    body.description != null ? String(body.description) : existing.description;
+  const prizeLabel =
+    body.prizeLabel != null || body.prize_label != null
+      ? String(body.prizeLabel ?? body.prize_label).trim()
+      : existing.prizeLabel;
+  const ticketCost =
+    body.ticketCost != null || body.ticket_cost != null
+      ? Number(body.ticketCost ?? body.ticket_cost)
+      : existing.ticketCost;
+  if (!title || !prizeLabel || !Number.isFinite(ticketCost) || ticketCost <= 0) {
+    const err = new Error('Invalid title/prizeLabel/ticketCost');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  let maxPer = existing.maxTicketsPerWallet;
+  if (body.maxTicketsPerWallet !== undefined || body.max_tickets_per_wallet !== undefined) {
+    const raw = body.maxTicketsPerWallet ?? body.max_tickets_per_wallet;
+    maxPer = raw === '' || raw == null ? null : Number(raw);
+    if (maxPer != null && (!Number.isFinite(maxPer) || maxPer < 1)) maxPer = null;
+  }
+
+  let startsAt = existing.startsAt;
+  let endsAt = existing.endsAt;
+  if (body.startsAt !== undefined || body.starts_at !== undefined) {
+    startsAt = toMs(body.startsAt ?? body.starts_at) || null;
+  }
+  if (body.endsAt !== undefined || body.ends_at !== undefined) {
+    endsAt = toMs(body.endsAt ?? body.ends_at) || null;
+  }
+
+  let status = existing.status;
+  if (body.status != null) {
+    const s = String(body.status).toLowerCase();
+    if (['open', 'closed', 'drawn'].includes(s)) status = s;
+  }
+  // Convenience: open: true/false from bot dashboard
+  if (body.open === true || body.open === 1 || body.open === '1') status = 'open';
+  if (body.open === false || body.open === 0 || body.open === '0') status = 'closed';
+
+  try {
+    getDb()
+      .prepare(
+        `UPDATE raffles SET
+          slug = ?, title = ?, description = ?, prize_label = ?,
+          ticket_cost = ?, max_tickets_per_wallet = ?, status = ?,
+          starts_at = ?, ends_at = ?
+         WHERE id = ?`
+      )
+      .run(slug, title, description, prizeLabel, ticketCost, maxPer, status, startsAt, endsAt, id);
+  } catch (e) {
+    if (String(e.message || '').includes('UNIQUE')) {
+      const err = new Error(`slug already exists: ${slug}`);
+      err.statusCode = 400;
+      throw err;
+    }
+    throw e;
+  }
+  return getRaffleById(id);
+}
+
+export function setRaffleStatus(id, status) {
+  const s = String(status || '').toLowerCase();
+  if (!['open', 'closed', 'drawn'].includes(s)) {
+    const err = new Error('status must be open|closed|drawn');
+    err.statusCode = 400;
+    throw err;
+  }
+  return updateRaffle(id, { status: s });
+}
+
+/**
+ * Delete raffle. Refuses if entries exist unless force.
+ * force also deletes raffle_entries for that raffle (does NOT refund $MOZE).
+ */
+export function deleteRaffle(id, { force = false } = {}) {
+  const existing = getRaffleById(id);
+  if (!existing) {
+    const err = new Error('Raffle not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  const db = getDb();
+  const cnt = db
+    .prepare(`SELECT COUNT(*) AS c FROM raffle_entries WHERE raffle_id = ?`)
+    .get(id);
+  if ((Number(cnt?.c) || 0) > 0 && !force) {
+    const err = new Error(
+      `Raffle has ${cnt.c} entrant(s). Pass force=1 to delete (does not refund $MOZE).`
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+  const tx = db.transaction(() => {
+    db.prepare(`DELETE FROM raffle_entries WHERE raffle_id = ?`).run(id);
+    db.prepare(`DELETE FROM raffles WHERE id = ?`).run(id);
+  });
+  tx();
+  return true;
+}

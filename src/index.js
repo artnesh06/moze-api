@@ -9,6 +9,7 @@ import leaderboardRoutes from './routes/leaderboard.js';
 import walletRoutes from './routes/wallet.js';
 import statsRoutes from './routes/stats.js';
 import raffleRoutes from './routes/raffle.js';
+import adminRaffleRoutes from './routes/admin-raffle.js';
 import { getHolders } from './services/holders.js';
 
 const app = Fastify({
@@ -27,7 +28,7 @@ await app.register(cors, {
     }
     cb(new Error(`CORS blocked: ${origin}`), false);
   },
-  methods: ['GET', 'POST', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 });
 
 getDb(); // ensure schema
@@ -39,6 +40,7 @@ await app.register(leaderboardRoutes);
 await app.register(walletRoutes);
 await app.register(statsRoutes);
 await app.register(raffleRoutes);
+await app.register(adminRaffleRoutes);
 
 app.setErrorHandler((err, req, reply) => {
   req.log.error(err);

@@ -31,4 +31,5 @@ export const config = {
   maxSupply: Number(process.env.MAX_SUPPLY || 1000),
   sigMaxAgeMs: Number(process.env.SIG_MAX_AGE_MS || 10 * 60 * 1000),
   msPerDay: 86_400_000,
+  adminSecret: process.env.ADMIN_SECRET || '',
 };
