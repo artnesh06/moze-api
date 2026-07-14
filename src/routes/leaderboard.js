@@ -24,7 +24,8 @@ export default async function leaderboardRoutes(app) {
 
   app.get('/v1/leaderboard', async (req) => {
     const force = String(req.query.force || '') === '1';
-    const top = Number(req.query.top || 25);
+    // Default 100 so `top` fallback has enough rows; full list is always in `rows`
+    const top = Number(req.query.top || 100);
     const you = normalizeAddress(req.query.you || '');
     const data = await getLeaderboard({ top, force });
 
