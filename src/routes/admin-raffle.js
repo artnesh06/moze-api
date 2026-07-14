@@ -9,6 +9,7 @@ import {
   updateRaffle,
   deleteRaffle,
   setRaffleStatus,
+  drawRaffle,
 } from '../services/raffle.js';
 
 function requireAdmin(req, reply) {
@@ -74,6 +75,22 @@ export default async function adminRaffleRoutes(app) {
       return { ok: true, id };
     } catch (err) {
       return reply.code(err.statusCode || 400).send({ error: err.message || 'Delete failed' });
+    }
+  });
+
+  /** Weighted ticket draw — sets winner + status=drawn */
+  app.post('/v1/admin/raffles/:id/draw', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    try {
+      const id = Number(req.params.id);
+      const force =
+        String(req.query.force || '') === '1' ||
+        req.body?.force === true ||
+        req.body?.force === 1;
+      const result = drawRaffle(id, { force });
+      return result;
+    } catch (err) {
+      return reply.code(err.statusCode || 400).send({ error: err.message || 'Draw failed' });
     }
   });
 }

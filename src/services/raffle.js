@@ -535,3 +535,85 @@ export function deleteRaffle(id, { force = false } = {}) {
   tx();
   return true;
 }
+
+/**
+ * Weighted random draw by ticket count. Sets status=drawn + winner_address.
+ * @param {number} id
+ * @param {{ force?: boolean }} opts — force redraw if already drawn
+ */
+export function drawRaffle(id, { force = false } = {}) {
+  const raffle = getRaffleById(id);
+  if (!raffle) {
+    const err = new Error('Raffle not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (raffle.status === 'drawn' && raffle.winnerAddress && !force) {
+    const err = new Error(
+      `Already drawn. Winner: ${raffle.winnerAddress}. Pass force=1 to redraw.`
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const db = getDb();
+  const entries = db
+    .prepare(
+      `SELECT address, tickets FROM raffle_entries
+       WHERE raffle_id = ? AND tickets > 0
+       ORDER BY tickets DESC, created_at ASC`
+    )
+    .all(id);
+
+  if (!entries.length) {
+    const err = new Error('No entries to draw from');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // Build ticket pool (cap expand for memory: use cumulative weights)
+  let total = 0;
+  for (const e of entries) total += Number(e.tickets) || 0;
+  if (total <= 0) {
+    const err = new Error('Total tickets is 0');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // crypto-ish random in [0, total)
+  const r = Math.floor(Math.random() * total);
+  let acc = 0;
+  let winner = entries[0].address;
+  for (const e of entries) {
+    acc += Number(e.tickets) || 0;
+    if (r < acc) {
+      winner = e.address;
+      break;
+    }
+  }
+
+  const now = Date.now();
+  db.prepare(
+    `UPDATE raffles
+     SET status = 'drawn', winner_address = ?, drawn_at = ?, ends_at = COALESCE(ends_at, ?)
+     WHERE id = ?`
+  ).run(String(winner).toLowerCase(), now, now, id);
+
+  const winnerEntry = entries.find(
+    (e) => String(e.address).toLowerCase() === String(winner).toLowerCase()
+  );
+
+  return {
+    ok: true,
+    raffleId: id,
+    slug: raffle.slug,
+    title: raffle.title,
+    prizeLabel: raffle.prizeLabel,
+    winnerAddress: String(winner).toLowerCase(),
+    winnerTickets: Number(winnerEntry?.tickets) || 0,
+    totalTickets: total,
+    entrants: entries.length,
+    drawnAt: now,
+    raffle: getRaffleById(id),
+  };
+}
